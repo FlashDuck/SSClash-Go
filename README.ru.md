@@ -20,7 +20,7 @@
 - **Один бинарник, все архитектуры.** Готовые статические бинарники для amd64, arm64, armv5/6/7, 386, loong64, riscv64, ppc64le, s390x и вариантов mips/mipsle. Веб-интерфейс встроен в демон.
 - **Встроенный веб-UI** — **Конфигурация**, **Настройки**, **Списки правил**, встроенная панель **Proxies / Connections / Rules / Core Logs** и **Системный лог** — редактирование YAML, управление службой, интерфейсами/ядром и потоки в реальном времени.
 - **Внешнее ядро Mihomo**, полностью управляемое демоном: загрузка/обновление с GitHub Releases (архитектура определяется автоматически), запуск/остановка/перезапуск, проверка `clash -t` и горячая перезагрузка через API Mihomo.
-- **Собственный движок файрвола**: атомарный ruleset `nft -f -` (`table inet clash`) или fallback iptables/ipset; режимы **TPROXY / HYBRID / TUN / MIXED / MIXED2**; модели exclude/explicit; блокировка QUIC; зарезервированные сети назначения; фильтр портов; обход LAN-клиентов; оптимизация fake-ip whitelist; обход IP серверов подписок.
+- **Собственный движок файрвола**: атомарный ruleset `nft -f -` (`table inet clash`) или fallback iptables/ipset; режимы **TPROXY / HYBRID / TUN / MIXED / MIXED2**; модели exclude/explicit; блокировка QUIC; опциональная блокировка DoT/DoH при перехвате DNS Mihomo; зарезервированные сети назначения; фильтр портов; обход LAN-клиентов; оптимизация fake-ip whitelist; обход IP серверов подписок.
 - **Policy routing** через `ip rule`/`ip route` (таблицы `100`/`101`, метки `0x1`/`0x2`/`0x3`).
 - **Безопасность по умолчанию**: пароль администратора при первом запуске (PBKDF2-HMAC-SHA256), HMAC-сессии, защита CSRF, опциональный HTTPS.
 - **Платформы**: OpenWrt, обычный Linux (systemd) и Keenetic (Entware).
@@ -40,8 +40,8 @@
 ├── proxy-providers/     # загруженные proxy-providers (было proxy_providers/)
 ├── subscriptions/       # вставленные списки ссылок (file providers)
 ├── ui/                  # файлы внешней панели
-├── .ssclash/            # настройки, пароль, сессия, резервная копия dnsmasq (OpenWrt)
-└── (runtime) /tmp/ssclash/  # кэши, tmpfs-симлинки, кэш IP подписок
+├── .ssclash/            # настройки, пароль, сессия, doh-custom.txt, резерв dnsmasq (OpenWrt)
+└── (runtime) /tmp/ssclash/  # кэши, tmpfs-симлинки, кэш IP подписок и списков DoH
 ```
 
 ### Миграция с LuCI SSClash
@@ -174,6 +174,24 @@ tar -xzf /tmp/ssclash-openwrt-service.tar.gz -C /
 
 Переключайте режим в **Настройках** → DNS до **Start** или **Restart**.
 
+### Блокировка DoT / DoH
+
+Когда активен перехват DNS Mihomo (**Firewall redirect** или **OpenWrt dnsmasq upstream**), в **Настройках** → DNS доступны опции, которые режут обход DNS на LAN **до** transparent proxy / redirect:
+
+- **Block DoT** — DROP TCP/UDP с портом назначения `853` (например Android Private DNS или фиксированный DoT-резолвер в обход DNS роутера).
+- **Block known DoH (dibdot)** — DROP TCP/UDP `443` на IPv4 из списка [dibdot DoH IP blocklists](https://github.com/dibdot/DoH-IP-blocklists) (GPL-3; список скачивается при работе, кэш в tmp, ежедневное обновление). **Важно:** HTTPS на эти IP (включая `1.1.1.1` и `8.8.8.8`) с затронутых LAN-клиентов перестаёт работать. IPv6 и DoH не на порту 443 не покрываются.
+- **Block DoH (custom list)** — тот же дроп `:443` для своих URL `https://host/path` (по одному на строку); хосты резолвятся в IPv4 при сохранении. Файл `.ssclash/doh-custom.txt` (входит в резервное копирование).
+
+Правила на ingress LAN; WAN пропускается. **Обход клиентов (firewall)** не попадает под эти DROP. Сам роутер не затрагивается (нет правил OUTPUT). Только IPv4.
+
+На бэкенде **iptables** для DoH нужен рабочий **ipset** (на OpenWrt ставится вместе с `iptables-mod-tproxy`; на Keenetic — модуль `xt_set`). Без ipset остаётся только Block DoT, в системном логе — предупреждение gateway.
+
+Опционально **conntrack-tools** (утилита `conntrack` в PATH): полный **Apply** или **Stop** сбрасывает отслеживаемые LAN-сессии на `:53` (в том числе после выключения **Firewall redirect**, чтобы старый DNAT не залипал) и на `:853`, пока включён Block DoT. Repair на Keenetic сбрасывает эти порты только если соответствующая опция включена. **nft** и **iptables** делят один conntrack. Без пакета новые пакеты идут по новым правилам сразу, старые сессии — до таймаута; предупреждение в логе gateway — если redirect или Block DoT включены. Инсталлятор не ставит — при необходимости `opkg install conntrack-tools` (OpenWrt / Entware).
+
+На **Keenetic TUN** часть трафика может уходить в Mihomo auto-route; для жёсткого enforcement через SSClash предпочтительны **HYBRID** или **MIXED2**.
+
+Изменения переключателей применяются при **Start**, **Restart** или **Apply** файрвола. Кнопка **Refresh list** обновляет dibdot без ожидания планового refresh.
+
 ## Ручная установка — обычный Linux
 
 Требования: systemd, `nft` или `iptables`, `ip`.
@@ -302,13 +320,14 @@ SSClash предлагает два режима:
 
 - **OpenWrt dnsmasq upstream** — Настройки → DNS (дефолт на OpenWrt). Направляет dnsmasq на Mihomo `:7874`; взаимоисключим с firewall redirect (см. **DNS на OpenWrt** выше).
 - **Firewall redirect** — Настройки → DNS. Дефолт на Keenetic и обычном Linux; опционально на OpenWrt. Перенаправляет LAN `:53` (TCP/UDP) на Mihomo `:7874`.
+- **Block DoT / Block DoH (dibdot) / Block DoH (custom)** — Настройки → DNS при активном перехвате DNS Mihomo; см. [Блокировка DoT / DoH](#блокировка-dot--doh).
 - **Блокировать QUIC-трафик** — блокирует UDP/443 для повышения эффективности прокси (YouTube и т.п.)
 - **Зарезервированные сети (firewall)** — destination IPv4 CIDR, которые не маркируются прозрачным прокси (Настройки → Options). По умолчанию RFC special-use и CGNAT `100.64.0.0/10` (Tailscale/Headscale); уберите этот префикс, если Tailnet должен идти через Mihomo. Правила Mihomo `private-ips` — отдельно. В UI скрыты на **Keenetic TUN**.
 - **Фильтр портов (firewall)** — destination TCP/UDP обрабатываются в netfilter *до* Mihomo (Настройки → Options). **Bypass** никогда не попадает в ядро (например, фиксированные порты BitTorrent). **Proxy-only** (если список не пуст) помечает только перечисленные порты — удобно на слабом роутере, чтобы случайные торрент-пиры не попадали в ядро. Пустые списки сохраняют прежнее поведение «все порты». Это не то же самое, что правила Mihomo `DST-PORT`. В UI скрыт на **Keenetic TUN** (Mihomo обходит port filter SSClash).
 - **Обход клиентов (firewall)** — source IPv4 CIDR без маркировки прозрачного прокси *и* без DNS redirect, поэтому эти LAN-хосты не попадают в Mihomo (Настройки → Options). Это не `SRC-IP-CIDR` в `config.yaml` (там пакет всё равно идёт в ядро). Пустой список = off. При fake-ip укажите устройству реальный DNS. На **OpenWrt dnsmasq upstream** (дефолт) список обхода не меняет DNS для клиентов с DNS роутера — они по-прежнему идут через dnsmasq → Mihomo; задайте публичный DNS на обходимом клиенте. На **OpenWrt firewall redirect** обход отключает DNS redirect (как на Keenetic/Linux) — нужен свой DNS на клиенте. На **Keenetic TUN** обход отключает только DNS redirect и QUIC block — Mihomo auto-route по-прежнему захватывает IP; для per-client control используйте `SRC-IP-CIDR` в `config.yaml` или HYBRID/MIXED2/TPROXY.
 - **Хранить правила и proxy-providers в RAM** — симлинки `rule-providers/` и `proxy-providers/` на tmpfs для снижения износа NAND
 - **Добавить HWID-заголовки к подпискам** — 16-символьный HWID для Remnawave на запросах proxy-provider (также при загрузке полного конфига по URL)
-- **Резервное копирование** — экспорт/импорт настроек и списков из `.ssclash/` на странице Настроек
+- **Резервное копирование** — экспорт/импорт настроек и списков из `.ssclash/` (включая `doh-custom.txt`) на странице Настроек
 - **Порт и TLS веб-UI** — через флаги установки или `SSCLASH_ADDR` / `SSCLASH_TLS_*` в init/systemd
 
 <p align="center">
