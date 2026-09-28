@@ -272,13 +272,15 @@ LAN TCP на `:443` часто не доходит до SSClash (счётчик�
 | **MIXED** | TCP TPROXY, UDP MARK → `clash-tun` | `tproxy-port: 7894` + `tun:` | На Keenetic: проблема TCP `:443` TPROXY; лучше HYBRID/MIXED2 |
 | **MIXED2** | TCP nat DNAT → `:7893`, UDP MARK → `clash-tun` | `redir-port: 7893` + `tun:` (без `tproxy-port`) | TCP как HYBRID + UDP как MIXED; все Options на Keenetic |
 
+Для TUN, MIXED и MIXED2 в `tun.stack` пишется значение из Настроек: **system**, **gvisor**, **mixed** или **mips** (userspace-стек [mipstack](https://github.com/MetaCubeX/mipstack), удобен на роутерах MIPS).
+
 При **Save** в Настройках, если proxy mode или TUN stack расходятся с активным профилем,
 SSClash перезаписывает `config.yaml` (порты/блоки как в таблице), проверяет `clash -t`
 и перезапускает Mihomo, если служба уже запущена.
 
 ## Шаг 4: Управление ядром Mihomo
 
-Скрипты автоустановки скачивают последнее ядро Mihomo автоматически. Также можно управлять из веб-UI или установить вручную (ниже).
+Скрипты автоустановки скачивают последнее ядро Mihomo автоматически. На маленьком flash новое ядро заменяет старое, а не хранится второй копией; неудачное обновление удаляет `.mihomo-new.*`, а не оставляет его забивать диск. Также можно управлять из веб-UI или установить вручную (ниже).
 
 В веб-UI: **Настройки** → **Ядро Mihomo** → **Загрузить последнее ядро**. SSClash:
 

@@ -9,6 +9,11 @@ software. This file applies to the distribution repository
 | Component | License | Notes |
 |-----------|---------|-------|
 | [gorilla/websocket](https://github.com/gorilla/websocket) | BSD-2-Clause | WebSocket client for the Mihomo API |
+| [Twemoji](https://github.com/twitter/twemoji) (Mozilla flags subset, `TwemojiMozilla-flags.woff2`) | CC-BY-4.0 | Embedded web UI static asset; regional-indicator flag glyphs in proxy names |
+
+Twemoji graphics © Twitter, Inc and other contributors, used under
+[Creative Commons Attribution 4.0 International](https://creativecommons.org/licenses/by/4.0/).
+The font file is a flags-only subset (not the full Twemoji set).
 
 ## Installed at runtime (not part of the SSClash license)
 

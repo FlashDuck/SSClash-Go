@@ -120,22 +120,134 @@ stop_bin_path() {
 	done
 }
 
+# fs_avail_kb prints free 1K-blocks for the filesystem holding path.
+# The field before Use% works for both single-line and wrapped df output.
+fs_avail_kb() {
+	_line=$(df -k "$1" 2>/dev/null | tail -n 1)
+	printf '%s\n' "$_line" | awk '{
+		for (i = 1; i <= NF; i++) if ($i ~ /%$/) { print $(i-1); exit }
+	}'
+}
+
+# path_noexec is true when the mount holding path has the noexec option.
+path_noexec() {
+	_dir="$1"
+	[ -d "$_dir" ] || _dir=$(dirname "$_dir")
+	_line=$(df "$_dir" 2>/dev/null | tail -n 1)
+	_mp=$(printf '%s\n' "$_line" | awk '{print $NF}')
+	[ -n "$_mp" ] || return 1
+	_opts=$(awk -v mp="$_mp" '$2 == mp { print $4; exit }' /proc/mounts 2>/dev/null || true)
+	case ",${_opts}," in
+		*,noexec,*) return 0 ;;
+	esac
+	return 1
+}
+
+# install_checked_bin copies src onto dst.
+# When the destination filesystem has room for the new file plus 1 MiB, the
+# new file is staged beside the old one and swapped with mv. Otherwise the
+# old file is removed first so a small overlay does not hold two copies.
+# A failed copy deletes the partial file and never leaves .mihomo-new.* /
+# .ssclash-install.*. The 5th argument "1" runs "<file> -v" before replacing
+# a working binary when the source filesystem is executable.
+install_checked_bin() {
+	_src="$1"
+	_dst="$2"
+	_mode="${3:-755}"
+	_label="${4:-binary}"
+	_verify="${5:-0}"
+	_dir=$(dirname "$_dst")
+	mkdir -p "$_dir" || return 1
+	rm -f "$_dir"/.mihomo-new.* "$_dir"/.ssclash-install.*
+
+	_bytes=$(wc -c < "$_src" | tr -d ' ')
+	_need=$((_bytes + 1048576))
+	_free_kb=$(fs_avail_kb "$_dir")
+	_free=$((${_free_kb:-0} * 1024))
+	_old=0
+	if [ -f "$_dst" ]; then
+		_old=$(wc -c < "$_dst" | tr -d ' ')
+	fi
+
+	_verified=0
+	if [ "$_verify" = "1" ] && ! path_noexec "$_src"; then
+		chmod +x "$_src" 2>/dev/null || true
+		if ! "$_src" -v >/dev/null 2>&1; then
+			warn "$_label does not run on this host — keeping existing binary"
+			return 1
+		fi
+		_verified=1
+	fi
+
+	if [ "$_free" -ge "$_need" ]; then
+		case "$_label" in
+			Mihomo) _stage="$_dir/.mihomo-new.$$" ;;
+			*) _stage="$_dir/.ssclash-install.$$" ;;
+		esac
+		rm -f "$_stage"
+		if ! cp -f "$_src" "$_stage"; then
+			rm -f "$_stage"
+			warn "failed to stage $_label (not enough free space)"
+			return 1
+		fi
+		if ! chmod "$_mode" "$_stage"; then
+			rm -f "$_stage"
+			return 1
+		fi
+		if [ "$_verify" = "1" ] && [ "$_verified" != "1" ]; then
+			if ! "$_stage" -v >/dev/null 2>&1; then
+				rm -f "$_stage"
+				warn "$_label does not run on this host — keeping existing binary"
+				return 1
+			fi
+		fi
+		stop_ssclash_for_upgrade
+		stop_bin_path "$_dst"
+		if ! mv -f "$_stage" "$_dst"; then
+			rm -f "$_stage"
+			return 1
+		fi
+		chmod "$_mode" "$_dst"
+		return 0
+	fi
+
+	if [ $((_free + _old)) -ge "$_need" ]; then
+		warn "low space: replacing $_label in place (no second copy on flash)"
+		stop_ssclash_for_upgrade
+		stop_bin_path "$_dst"
+		rm -f "$_dst"
+		if ! cp -f "$_src" "$_dst"; then
+			rm -f "$_dst"
+			warn "$_label replace failed — binary missing until reinstall"
+			return 1
+		fi
+		if ! chmod "$_mode" "$_dst"; then
+			rm -f "$_dst"
+			return 1
+		fi
+		if [ "$_verify" = "1" ] && [ "$_verified" != "1" ]; then
+			if ! "$_dst" -v >/dev/null 2>&1; then
+				rm -f "$_dst"
+				warn "$_label does not run — removed the failed install"
+				return 1
+			fi
+		fi
+		return 0
+	fi
+
+	_need_mib=$(((_need + 1048575) / 1048576))
+	_free_mib=$((_free / 1048576))
+	warn "not enough free space for $_label (need about ${_need_mib} MiB, free ${_free_mib} MiB) — keeping existing binary"
+	return 1
+}
+
 install_bin() {
 	_src="$1"
 	_dst="$2"
 	_mode="${3:-755}"
 	_label="${4:-binary}"
 	verify_downloaded_bin "$_src" "$_label" || return 1
-	mkdir -p "$(dirname "$_dst")"
-	stop_ssclash_for_upgrade
-	stop_bin_path "$_dst"
-	_tmp="$(dirname "$_dst")/.ssclash-install.$$"
-	rm -f "$_tmp"
-	cp -f "$_src" "$_tmp"
-	chmod "$_mode" "$_tmp"
-	mv -f "$_tmp" "$_dst"
-	chmod "$_mode" "$_dst"
-	return 0
+	install_checked_bin "$_src" "$_dst" "$_mode" "$_label" 0
 }
 
 stop_ssclash_for_upgrade() {
@@ -488,24 +600,14 @@ install_mihomo() {
 		MIHOMO_STATUS="missing (bad/wrong-arch binary)"
 		return 0
 	fi
-	# Do not execute from /tmp: generic Linux often mounts it noexec, so
-	# `mktemp && chmod +x && -v` fails even though the kernel is fine.
-	mkdir -p "$(dirname "$CLASH_BIN")"
-	_stage="$(dirname "$CLASH_BIN")/.mihomo-new.$$"
-	rm -f "$_stage"
-	cp -f "$_tmp_bin" "$_stage"
-	rm -f "$_tmp_bin"
-	chmod +x "$_stage"
-	if ! "$_stage" -v >/dev/null 2>&1; then
-		warn "downloaded Mihomo binary does not run on this host — keeping existing kernel"
-		rm -f "$_stage"
-		MIHOMO_STATUS="missing (bad/wrong-arch binary)"
+	# -v runs from /tmp when that mount is executable. A second copy is written
+	# beside the old kernel only when the destination filesystem has room for it.
+	if ! install_checked_bin "$_tmp_bin" "$CLASH_BIN" 755 "Mihomo" 1; then
+		rm -f "$_tmp_bin"
+		MIHOMO_STATUS="missing (install failed)"
 		return 0
 	fi
-
-	stop_ssclash_for_upgrade
-	mv -f "$_stage" "$CLASH_BIN"
-	chmod +x "$CLASH_BIN"
+	rm -f "$_tmp_bin"
 	rm -f /opt/clash/bin/meta-backup 2>/dev/null || true
 
 	MIHOMO_V=$("$CLASH_BIN" -v 2>/dev/null || true)

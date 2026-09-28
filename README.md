@@ -270,13 +270,15 @@ is Mihomo `auto-redirect`, not HYBRID `redir-port`.
 | **MIXED** | TCP TPROXY, UDP MARK → `clash-tun` | `tproxy-port: 7894` + `tun:` | On Keenetic: TCP `:443` TPROXY issue; prefer HYBRID/MIXED2 |
 | **MIXED2** | TCP nat DNAT → `:7893`, UDP MARK → `clash-tun` | `redir-port: 7893` + `tun:` (no `tproxy-port`) | HYBRID TCP path + MIXED UDP path; full Options on Keenetic |
 
+TUN, MIXED and MIXED2 write `tun.stack` from Settings: **system**, **gvisor**, **mixed**, or **mips** (pure-Go [mipstack](https://github.com/MetaCubeX/mipstack), useful on MIPS routers).
+
 When **Save** in Settings changes proxy mode or TUN stack, SSClash rewrites the active
 `config.yaml` profile if it disagrees (same ports/blocks as the table above), validates
 with `clash -t`, then restarts Mihomo when the service is running.
 
 ## Step 4: Mihomo kernel management
 
-The autoinstall scripts download the latest Mihomo kernel automatically. You can also manage it from the web UI or install manually (see below).
+The autoinstall scripts download the latest Mihomo kernel automatically. On a small flash filesystem the new kernel replaces the old one instead of keeping both copies, and a failed update removes `.mihomo-new.*` instead of leaving it to fill the disk. You can also manage it from the web UI or install manually (see below).
 
 From the web UI, go to **Settings** → **Mihomo kernel** and click **Download latest kernel**. SSClash will:
 
