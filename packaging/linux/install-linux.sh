@@ -481,6 +481,24 @@ case "$MODE" in
 esac
 info "Install mode: $MODE"
 
+# Gateway uses conntrack to drop stale DNS/DoT sessions and ipset for DoH and port filters.
+if [ "$MODE" = "gateway" ]; then
+	_missing=""
+	command -v conntrack >/dev/null 2>&1 || _missing="conntrack"
+	command -v ipset >/dev/null 2>&1 || _missing="${_missing:+$_missing }ipset"
+	if [ -n "$_missing" ]; then
+		if command -v apt-get >/dev/null 2>&1; then
+			info "installing $_missing"
+			DEBIAN_FRONTEND=noninteractive apt-get update -qq \
+				|| warn "apt-get update failed — trying install anyway"
+			DEBIAN_FRONTEND=noninteractive apt-get install -y $_missing \
+				|| warn "apt-get install $_missing failed"
+		else
+			warn "install $_missing (apt install conntrack ipset) for DNS session flush and ipset rules"
+		fi
+	fi
+fi
+
 map_arch() {
 	case "$1" in
 		x86_64|amd64) echo "amd64" ;;

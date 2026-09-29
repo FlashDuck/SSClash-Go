@@ -635,14 +635,13 @@ pkg_update() {
 install_deps() {
 	# wget-ssl: stock OpenWrt wget is often uclient-fetch; GitHub HTTPS needs real SSL wget.
 	DEPS="$TPROXY_PKG kmod-tun ca-bundle wget-ssl"
-	if [ "$TPROXY_PKG" = "iptables-mod-tproxy" ]; then
-		DEPS="$DEPS ipset"
-	fi
 	say "installing dependencies: $DEPS"
 	if [ "$PKG_MGR" = "apk" ]; then
 		apk add $DEPS || die "dependency install failed"
+		apk add conntrack ipset || warn "conntrack/ipset install failed (DNS session flush and ipset rules may be skipped)"
 	else
 		opkg install $DEPS || die "dependency install failed"
+		opkg install conntrack ipset || warn "conntrack/ipset install failed (DNS session flush and ipset rules may be skipped)"
 	fi
 }
 

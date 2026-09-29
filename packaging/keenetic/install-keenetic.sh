@@ -900,6 +900,29 @@ ensure_ip_full() {
 	warn "Install the full iproute2: opkg install ip-full"
 }
 
+# ensure_entware_tool installs an optional Entware package when its command is missing.
+# conntrack flushes stale DNS/DoT sessions; ipset is required for DoH drops and port filters.
+ensure_entware_tool() {
+	_bin="$1"
+	_pkg="$2"
+	if command -v "$_bin" >/dev/null 2>&1; then
+		info "$_bin OK: $(command -v "$_bin")"
+		return 0
+	fi
+	if ! command -v opkg >/dev/null 2>&1; then
+		warn "$_bin not found and opkg is missing — install Entware package $_pkg"
+		return 0
+	fi
+	say "$_bin not found — opkg install $_pkg"
+	opkg update >/dev/null 2>&1 || warn "opkg update failed — trying install anyway"
+	if opkg install "$_pkg"; then
+		hash -r 2>/dev/null || true
+		info "opkg installed: $_pkg"
+		return 0
+	fi
+	warn "opkg install $_pkg failed"
+}
+
 # pick_lan_ipv4 prefers RFC1918 from global addresses (avoids WAN/KeenDNS in hints).
 pick_lan_ipv4() {
 	_first=""
@@ -939,6 +962,8 @@ ensure_fetcher
 check_netfilter_modules
 ensure_iptables_userspace
 ensure_ip_full
+ensure_entware_tool conntrack conntrack
+ensure_entware_tool ipset ipset
 detect_arch
 fetch_ssclash_release
 install_ssclash
@@ -967,6 +992,7 @@ cat <<EOF
    - Netfilter subsystem kernel modules — enabled (reboot after enabling)
    - USB / Entware / OPKG — working
    - ip-full if `ip rule` fails (installer tries opkg install ip-full)
+   - conntrack and ipset (installer tries opkg install; needed for DNS session flush and DoH/ipset rules)
    - iptables userspace (xtables): firmware /sbin/iptables when present, else
      opkg install iptables-legacy or opkg install iptables (iptables -V must NOT say nf_tables)
 
