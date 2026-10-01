@@ -13,6 +13,7 @@
 #   --port <n>           Web UI port (default 9091; all interfaces)
 #   --bind <ip>          Bind web UI to this IP (with --port, default 9091)
 #   --addr <host:port>   Full SSCLASH_ADDR (overrides --port / --bind)
+#   --root <path>        Install directory (default /opt/clash)
 #   --tls-cert <path>    TLS certificate (PEM); requires --tls-key
 #   --tls-key <path>     TLS private key (PEM); requires --tls-cert
 #   --tls-self-signed    Generate $ROOT/.ssclash/tls.{crt,key} (needs openssl)
@@ -48,6 +49,7 @@ TLS_CERT=""
 TLS_KEY=""
 TLS_SELF_SIGNED=0
 SKIP_MIHOMO=0
+ROOT_EXPLICIT=0
 
 say()  { echo "[ssclash] $*"; }
 info() { echo "[ssclash]   $*"; }
@@ -346,6 +348,18 @@ parse_install_options() {
 			--bind=*) UI_BIND="${1#*=}"; shift ;;
 			--addr) UI_ADDR="${2:-}"; shift 2 ;;
 			--addr=*) UI_ADDR="${1#*=}"; shift ;;
+			--root)
+				[ -n "${2:-}" ] || die "--root requires a path"
+				ROOT=$2
+				ROOT_EXPLICIT=1
+				shift 2
+				;;
+			--root=*)
+				ROOT=${1#*=}
+				[ -n "$ROOT" ] || die "--root requires a path"
+				ROOT_EXPLICIT=1
+				shift
+				;;
 			--tls-cert) TLS_CERT="${2:-}"; shift 2 ;;
 			--tls-cert=*) TLS_CERT="${1#*=}"; shift ;;
 			--tls-key) TLS_KEY="${2:-}"; shift 2 ;;
@@ -353,7 +367,7 @@ parse_install_options() {
 			--tls-self-signed) TLS_SELF_SIGNED=1; shift ;;
 			--no-mihomo) SKIP_MIHOMO=1; shift ;;
 			-h|--help)
-				sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'
+				sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'
 				exit 0 ;;
 			*) die "Unknown option: $1 (try --help)" ;;
 		esac
@@ -367,6 +381,38 @@ validate_ui_port() {
 	if [ "$UI_PORT" -lt 1 ] || [ "$UI_PORT" -gt 65535 ]; then
 		die "invalid --port (use 1-65535): $UI_PORT"
 	fi
+}
+
+validate_root() {
+	case "$ROOT" in
+		/*) ;;
+		*) die "--root must be an absolute path: $ROOT" ;;
+	esac
+	case "$ROOT" in
+		*..*) die "--root must not contain .." ;;
+		*[!A-Za-z0-9/_.-]*) die "invalid --root (letters, digits, / _ . - only): $ROOT" ;;
+	esac
+	ROOT=${ROOT%/}
+	[ -n "$ROOT" ] && [ "$ROOT" != "/" ] || die "--root must be a directory below /"
+	if [ -d "$ROOT" ]; then
+		[ -w "$ROOT" ] || die "$ROOT is not writable. Pass --root under a writable mount such as /data"
+		return 0
+	fi
+	mkdir -p "$ROOT" 2>/dev/null || die "cannot create $ROOT (read-only filesystem?). Pass --root under a writable mount such as /data"
+}
+
+# Re-runs without --root keep ROOT from the installed init script.
+apply_install_paths() {
+	if [ "$ROOT_EXPLICIT" != 1 ] && [ -f /etc/init.d/ssclash ]; then
+		_existing=$(sed -n 's/^ROOT=//p' /etc/init.d/ssclash | head -1 | tr -d '"' | tr -d "'")
+		if [ -n "$_existing" ]; then
+			ROOT=$_existing
+			info "keeping existing install root: $ROOT"
+		fi
+	fi
+	validate_root
+	SSCLASH_BIN="$ROOT/bin/ssclash"
+	CLASH_BIN="$ROOT/bin/clash"
 }
 
 finalize_ui_addr() {
@@ -468,6 +514,8 @@ pick_lan_ipv4() {
 configure_openwrt_init() {
 	_f="/etc/init.d/ssclash"
 	[ -f "$_f" ] || return 0
+	sed -i "s|^ROOT=.*|ROOT=${ROOT}|" "$_f"
+	info "install root: ${ROOT}"
 	if [ -n "$UI_ADDR" ]; then
 		sed -i "s|^[[:space:]]*# procd_set_param env SSCLASH_ADDR=.*|	procd_set_param env SSCLASH_ADDR=\"${UI_ADDR}\"|" "$_f"
 		info "web UI listen: ${UI_ADDR}"
@@ -836,7 +884,7 @@ install_mihomo() {
 		return 0
 	fi
 	rm -f "$_tmp_bin"
-	rm -f /opt/clash/bin/meta-backup 2>/dev/null || true
+	rm -f "$ROOT/bin/meta-backup" 2>/dev/null || true
 
 	MIHOMO_V=$("$CLASH_BIN" -v 2>/dev/null || true)
 	say "Mihomo installed: ${MIHOMO_V:-ok}"
@@ -845,6 +893,7 @@ install_mihomo() {
 
 # ---- MAIN -------------------------------------------------------------------
 parse_install_options "$@"
+apply_install_paths
 validate_ui_port
 finalize_ui_addr
 prepare_tls_certs

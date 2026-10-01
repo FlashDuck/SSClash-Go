@@ -91,6 +91,7 @@ wget -T 30 -qO- https://github.com/zerolabnet/SSClash-Go/raw/refs/heads/main/ins
 | `--port <n>` | Порт веб-UI (по умолчанию `9091`, все интерфейсы) |
 | `--bind <ip>` | Привязка веб-UI к IP (вместе с `--port`) |
 | `--addr <host:port>` | Полный `SSCLASH_ADDR` (перекрывает `--port` / `--bind`) |
+| `--root <path>` | Только OpenWrt — каталог установки (по умолчанию `/opt/clash`; при обновлении сохраняется, если флаг не передан) |
 | `--tls-cert <path>` | TLS-сертификат (PEM); требует `--tls-key` |
 | `--tls-key <path>` | TLS-ключ (PEM); требует `--tls-cert` |
 | `--tls-self-signed` | Сгенерировать `$ROOT/.ssclash/tls.{crt,key}` (нужен `openssl`) |
