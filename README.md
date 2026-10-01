@@ -189,7 +189,7 @@ On the **iptables** backend, DoH blocking requires working **ipset** (installed 
 
 Optional **conntrack-tools** (the `conntrack` CLI on PATH): LAN flows to port `53` are cleared when **Firewall redirect** turns on or off, and on **Stop** if redirect was installed. Port `853` is cleared only when Block DoT turns on. A repeated Apply with the same flags does not touch conntrack. Keenetic repair clears a port only when repair actually restored redirect or DoT DROP rules, not when it only re-seated an existing jump. **nft** and **iptables** share kernel conntrack. Without the tool, new packets follow the new rules immediately but old sessions linger until timeout, with a one-time gateway log warning when redirect or Block DoT is on. Installers do not install it — use `opkg install conntrack-tools` on OpenWrt or Entware if you want immediate teardown.
 
-On **Keenetic TUN**, Mihomo auto-route may still capture some traffic; prefer **HYBRID** or **MIXED2** if SSClash must enforce these drops.
+On **Keenetic TUN**, TCP and UDP are both marked into `clash-tun`. Prefer **HYBRID** or **MIXED2** if ordinary TCP/HTTPS through the tun device fails.
 
 Toggle changes take effect on **Start**, **Restart**, or firewall **Apply**. **Refresh list** updates dibdot immediately.
 
@@ -233,33 +233,38 @@ at runtime, but forced nft is refused at Apply. Entware builds whose `iptables -
 cannot intercept Keenetic LAN forwarding — use xtables instead (`/sbin/iptables`, `iptables-legacy`, or
 Entware `iptables` when it is xtables). The installer runs `opkg install iptables-legacy` or
 `opkg install iptables` when no suitable CLI exists. **Netfilter subsystem kernel modules** (Components)
-are still required for kernel support (`xt_TPROXY`, …). In **TUN** mode Mihomo starts with `DISABLE_NFTABLES=1` so its
-`auto-redirect` uses iptables too (same reason as SSClash).
+are still required for kernel support (`xt_TPROXY`, …). In **TUN** mode Mihomo starts with `DISABLE_NFTABLES=1` because Keenetic has no nftables for LAN forwarding.
 
 **Recommended proxy modes on Keenetic (in order):** **HYBRID** (installer default — SSClash
 nat DNAT + TPROXY, all Options features, works with router HTTPS on 443), **MIXED2**
 (TCP like HYBRID, UDP via `clash-tun` — better QUIC/UDP, no TCP 443 TPROXY issue),
-**TPROXY** (if you move router management HTTPS off TCP 443, e.g. 8443), **TUN** last
-(Mihomo auto-route/redirect — SSClash bypass/policy Options are limited).
+**TPROXY** (if you move router management HTTPS off TCP 443, e.g. 8443), **TUN**
+(SSClash MARK of TCP and UDP into `clash-tun`, same as OpenWrt; verify TCP/HTTPS).
 **MIXED** (TCP TPROXY + UDP TUN) inherits the Keenetic TCP `:443` TPROXY limitation;
 rarely useful here — prefer **HYBRID** or **MIXED2**.
 
-**Keenetic access policy (HYBRID / TPROXY / MIXED / MIXED2):** Settings → **Respect Keenetic access
+**Keenetic access policy:** Settings → **Respect Keenetic access
 policy** — select policies from the router (Internet → Connection Policies). SSClash matches
 NDMS connmarks in firewall rules so only devices assigned to those policies enter the
-proxy path. Unavailable in **TUN** (Mihomo owns capture there).
+proxy path. This includes **TUN**.
 
 **TPROXY on Keenetic and TCP 443:** KeeneticOS uses port 443 internally for `xt_TPROXY`;
 LAN TCP to `:443` often never reaches SSClash (TPROXY counters stay at zero). Use **HYBRID**
 (default), move router management HTTPS off TCP 443 in the Keenetic web UI (any port
 except 443, e.g. 8443), or use **TUN**.
 
-**Keenetic TUN vs OpenWrt/Linux TUN:** on Keenetic, pure TUN uses Mihomo
-`auto-route` / `auto-redirect` (not SSClash MARK→`clash-tun`). The synced `tun:` block
-includes `strict-route: true` and `dns-hijack: []` — strict routing for gateway capture;
-empty DNS hijack so LAN DNS stays on SSClash **Firewall redirect** (`:53` → Mihomo),
-not a second hijack inside Mihomo. In **Connections**, TCP may show **Redir | tcp** — that
-is Mihomo `auto-redirect`, not HYBRID `redir-port`.
+**Keenetic TUN and OpenWrt/Linux TUN** use the same capture: SSClash marks traffic into `clash-tun`, and the synced `tun:` block has `auto-route: false` and `auto-redirect: false`. TCP and UDP both enter the tun device. That is not the same as HYBRID (TCP stays on nat DNAT and never enters the tun). After upgrading a Keenetic that previously ran Mihomo `auto-redirect`, **Stop then Start** so old redirect rules are removed.
+
+Check pure **TUN** on the router in this order:
+
+1. Ordinary **TCP/HTTPS** from a LAN client opens. This is the blocker. Then try `tun.stack` **system** and **gvisor** (or **mixed**).
+2. **Respect Keenetic access policy** — a device inside the selected policy is proxied; a device outside is not.
+3. **Bypass clients**, **port filter**, and **reserved networks** stay out of Mihomo.
+4. DNS redirect, and Block DoT / Block DoH when those switches are on.
+5. After an NDMS reload or a WAN change, the `CLASH` and `SSCLASH_LATE` chains are still in place.
+6. QUIC/`DIRECT` and IPsec are worth noting; they are not a reason to roll back this capture change by themselves.
+7. A WireGuard server on the router still works.
+8. If TCP/HTTPS fails, switch the mode to **HYBRID** or **MIXED2** without rolling back the binary.
 
 ## Proxy modes (Settings)
 
@@ -267,7 +272,7 @@ is Mihomo `auto-redirect`, not HYBRID `redir-port`.
 |---|---|---|---|
 | **TPROXY** | SSClash mangle TPROXY `:7894` | `tproxy-port: 7894` | Default on OpenWrt/Linux |
 | **HYBRID** | TCP nat DNAT → `:7893`, UDP TPROXY `:7894` | `redir-port: 7893`, `tproxy-port: 7894` | Default on Keenetic; full Options |
-| **TUN** | OpenWrt/Linux: MARK → `clash-tun`. Keenetic: Mihomo auto-route/redirect | `tun:` block (platform-specific) | TUN stack in Settings (tun/mixed) |
+| **TUN** | MARK → `clash-tun` (OpenWrt, Linux, and Keenetic) | `tun:` block (`auto-route: false`) | TUN stack in Settings. On Keenetic, verify TCP/HTTPS; HYBRID/MIXED2 remain the safer default |
 | **MIXED** | TCP TPROXY, UDP MARK → `clash-tun` | `tproxy-port: 7894` + `tun:` | On Keenetic: TCP `:443` TPROXY issue; prefer HYBRID/MIXED2 |
 | **MIXED2** | TCP nat DNAT → `:7893`, UDP MARK → `clash-tun` | `redir-port: 7893` + `tun:` (no `tproxy-port`) | HYBRID TCP path + MIXED UDP path; full Options on Keenetic |
 
@@ -323,9 +328,9 @@ SSClash offers two interface processing modes:
 - **Firewall redirect** — Settings → DNS. Default on Keenetic and generic Linux; optional on OpenWrt. Redirects LAN port 53 (TCP/UDP) to Mihomo `:7874`.
 - **Block DoT / Block DoH (dibdot) / Block DoH (custom)** — Settings → DNS when Mihomo DNS interception is active; see [Block DoT / DoH](#block-dot--doh).
 - **Block QUIC traffic** — blocks UDP/443 to improve proxy effectiveness (YouTube, etc.)
-- **Reserved networks (firewall)** — destination IPv4 CIDRs that skip transparent-proxy marking (Settings → Options). Defaults include RFC special-use ranges and CGNAT `100.64.0.0/10` (Tailscale/Headscale); remove that prefix if Tailnet should go through Mihomo. Mihomo `private-ips` rules are separate. Hidden in UI on **Keenetic TUN**.
-- **Port filter (firewall)** — destination TCP/UDP ports handled in netfilter *before* Mihomo (Settings → Options). **Bypass** never enters the core (e.g. fixed BitTorrent listen ports). **Proxy-only** (when non-empty) marks only listed ports — useful on weak routers so random torrent peers never enter the core. Empty lists keep the previous “all ports” behaviour. This is not the same as Mihomo `DST-PORT` rules. Hidden in UI on **Keenetic TUN** (Mihomo capture bypasses SSClash port filter).
-- **Bypass clients (firewall)** — source IPv4 CIDRs that skip transparent-proxy marking *and* DNS redirect, so those LAN hosts never enter Mihomo (Settings → Options). Not `config.yaml` `SRC-IP-CIDR` (that still sends packets into the core). Empty = off. With fake-ip, set a real DNS on the device. On **OpenWrt dnsmasq upstream** (default), the bypass list does not change DNS for clients using router DNS — they still resolve via dnsmasq → Mihomo; set a public DNS on bypassed clients. On **OpenWrt firewall redirect**, bypass skips DNS redirect (same as Keenetic/Linux) — use a public DNS on the bypassed client. On **Keenetic TUN**, bypass skips DNS redirect and QUIC block only — Mihomo auto-route still captures IP traffic; use `SRC-IP-CIDR` in `config.yaml` or switch to HYBRID/MIXED2/TPROXY for SSClash-native per-client control.
+- **Reserved networks (firewall)** — destination IPv4 CIDRs that skip transparent-proxy marking (Settings → Options). Defaults include RFC special-use ranges and CGNAT `100.64.0.0/10` (Tailscale/Headscale); remove that prefix if Tailnet should go through Mihomo. Mihomo `private-ips` rules are separate.
+- **Port filter (firewall)** — destination TCP/UDP ports handled in netfilter *before* Mihomo (Settings → Options). **Bypass** never enters the core (e.g. fixed BitTorrent listen ports). **Proxy-only** (when non-empty) marks only listed ports — useful on weak routers so random torrent peers never enter the core. Empty lists keep the previous “all ports” behaviour. This is not the same as Mihomo `DST-PORT` rules.
+- **Bypass clients (firewall)** — source IPv4 CIDRs that skip transparent-proxy marking *and* DNS redirect, so those LAN hosts never enter Mihomo (Settings → Options). Not `config.yaml` `SRC-IP-CIDR` (that still sends packets into the core). Empty = off. With fake-ip, set a real DNS on the device. On **OpenWrt dnsmasq upstream** (default), the bypass list does not change DNS for clients using router DNS — they still resolve via dnsmasq → Mihomo; set a public DNS on bypassed clients. On **OpenWrt firewall redirect**, bypass skips DNS redirect (same as Keenetic/Linux) — use a public DNS on the bypassed client.
 - **Store rules and proxy providers in RAM** — symlinks `rule-providers/` and `proxy-providers/` to tmpfs to reduce NAND wear
 - **Add HWID headers to subscriptions** — Remnawave-compatible 16-character HWID on proxy-provider requests (also used when fetching a remote full config URL)
 - **Backup / restore** — export or import `.ssclash/` settings and lists (including `doh-custom.txt`) from the Settings page

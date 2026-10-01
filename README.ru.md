@@ -189,7 +189,7 @@ tar -xzf /tmp/ssclash-openwrt-service.tar.gz -C /
 
 Опционально **conntrack-tools** (утилита `conntrack` в PATH): сброс LAN-сессий на `:53` происходит, когда **Firewall redirect** включается или выключается, и при **Stop**, если redirect был установлен. `:853` сбрасывается только в момент включения Block DoT. Повторный Apply с теми же флагами conntrack не трогает. Repair на Keenetic сбрасывает порт только если repair реально восстановил redirect или DoT DROP, а не при одном лишь re-seat jump. **nft** и **iptables** делят один conntrack. Без пакета новые пакеты идут по новым правилам сразу, старые сессии — до таймаута; предупреждение в логе gateway — если redirect или Block DoT включены. Инсталлятор не ставит — при необходимости `opkg install conntrack-tools` (OpenWrt / Entware).
 
-На **Keenetic TUN** часть трафика может уходить в Mihomo auto-route; для жёсткого enforcement через SSClash предпочтительны **HYBRID** или **MIXED2**.
+На **Keenetic TUN** TCP и UDP маркируются в `clash-tun`. Если обычный TCP/HTTPS через устройство не идёт, предпочтительны **HYBRID** или **MIXED2**.
 
 Изменения переключателей применяются при **Start**, **Restart** или **Apply** файрвола. Кнопка **Refresh list** обновляет dibdot без ожидания планового refresh.
 
@@ -234,34 +234,40 @@ iptables, но принудительный nft отвергается при Ap
 `iptables-legacy` или Entware `iptables`, если это xtables). Инсталлятор выполняет
 `opkg install iptables-legacy` или `opkg install iptables`, если подходящего CLI нет.
 Компонент **Netfilter subsystem kernel modules** всё равно нужен для модулей ядра
-(`xt_TPROXY`, …). В режиме **TUN** Mihomo стартует с `DISABLE_NFTABLES=1`, чтобы
-его `auto-redirect` тоже использовал iptables (та же причина, что у SSClash).
+(`xt_TPROXY`, …). В режиме **TUN** Mihomo стартует с `DISABLE_NFTABLES=1`:
+на Keenetic нет nftables для проброса LAN.
 
 **Рекомендуемые режимы прокси на Keenetic (по порядку):** **HYBRID** (дефолт
 инсталлятора — SSClash nat DNAT + TPROXY, все Options, работает при HTTPS роутера
 на 443), **MIXED2** (TCP как HYBRID, UDP через `clash-tun` — лучше QUIC/UDP, без
 проблемы TCP 443 TPROXY), **TPROXY** (если перенести HTTPS **управления роутером**
-с TCP 443, напр. 8443, в веб-UI Keenetic), **TUN** в последнюю очередь (Mihomo
-auto-route/redirect — bypass/policy в Options ограничены).
+с TCP 443, напр. 8443, в веб-UI Keenetic), **TUN**
+(SSClash маркирует TCP и UDP в `clash-tun`, как на OpenWrt; проверьте TCP/HTTPS).
 **MIXED** (TCP TPROXY + UDP TUN) наследует ограничение Keenetic на TCP `:443` в TPROXY;
 на практике редко полезен — предпочитайте **HYBRID** или **MIXED2**.
 
-**Политики доступа Keenetic (HYBRID / TPROXY / MIXED / MIXED2):** Настройки → **Respect Keenetic
+**Политики доступа Keenetic:** Настройки → **Respect Keenetic
 access policy** — выбор политик с роутера (Интернет → Приоритеты подключений). SSClash
 учитывает connmark NDMS в правилах файрвола: в прокси попадают только устройства,
-назначенные на выбранные политики. В **TUN** недоступно (захват делает Mihomo).
+назначенные на выбранные политики. Это работает и в **TUN**.
 
 **TPROXY на Keenetic и TCP 443:** KeeneticOS использует порт 443 внутри `xt_TPROXY`;
 LAN TCP на `:443` часто не доходит до SSClash (счётчики TPROXY остаются нулевыми).
 Используйте **HYBRID** (дефолт), перенесите HTTPS управления роутером на другой порт
 (напр. 8443) в веб-UI Keenetic, или **TUN**.
 
-**Keenetic TUN vs OpenWrt/Linux TUN:** на Keenetic чистый TUN использует Mihomo
-`auto-route` / `auto-redirect` (не SSClash MARK→`clash-tun`). В синхронизируемый блок
-`tun:` входят `strict-route: true` и `dns-hijack: []` — жёсткая маршрутизация на
-шлюзе; пустой DNS hijack, чтобы LAN DNS шёл через SSClash **Firewall redirect**
-(`:53` → Mihomo), без второго перехвата в Mihomo. В **Connections** TCP может быть
-**Redir | tcp** — это Mihomo `auto-redirect`, а не HYBRID `redir-port`.
+**Keenetic TUN и OpenWrt/Linux TUN** используют один захват: SSClash маркирует трафик в `clash-tun`, в блоке `tun:` стоят `auto-route: false` и `auto-redirect: false`. TCP и UDP оба входят в устройство. Это не HYBRID: там TCP остаётся на nat DNAT и в tun не попадает. После обновления Keenetic, где раньше работал Mihomo `auto-redirect`, сделайте **Stop, затем Start**, чтобы снять старые redirect.
+
+Проверьте чистый **TUN** на роутере в таком порядке:
+
+1. Обычный **TCP/HTTPS** с клиента в LAN открывается. Это блокер. Затем отдельно `tun.stack` **system** и **gvisor** (или **mixed**).
+2. **Respect Keenetic access policy** — устройство внутри выбранной политики идёт в прокси, устройство вне неё нет.
+3. **Обход клиентов**, **фильтр портов** и **зарезервированные сети** не попадают в Mihomo.
+4. DNS redirect и Block DoT / Block DoH, если эти переключатели включены.
+5. После пересборки NDMS или смены WAN цепочки `CLASH` и `SSCLASH_LATE` на месте.
+6. QUIC/`DIRECT` и IPsec стоит записать отдельно; сами по себе они не повод откатывать этот захват.
+7. WireGuard-сервер на роутере по-прежнему работает.
+8. Если TCP/HTTPS не открывается, переключите режим на **HYBRID** или **MIXED2**, бинарник откатывать не нужно.
 
 ## Режимы прокси (Настройки)
 
@@ -269,7 +275,7 @@ LAN TCP на `:443` часто не доходит до SSClash (счётчик�
 |---|---|---|---|
 | **TPROXY** | SSClash mangle TPROXY `:7894` | `tproxy-port: 7894` | Дефолт на OpenWrt/Linux |
 | **HYBRID** | TCP nat DNAT → `:7893`, UDP TPROXY `:7894` | `redir-port: 7893`, `tproxy-port: 7894` | Дефолт на Keenetic; все Options |
-| **TUN** | OpenWrt/Linux: MARK → `clash-tun`. Keenetic: Mihomo auto-route/redirect | блок `tun:` (зависит от платформы) | TUN stack в Настройках (tun/mixed) |
+| **TUN** | MARK → `clash-tun` (OpenWrt, Linux и Keenetic) | блок `tun:` (`auto-route: false`) | TUN stack в Настройках. На Keenetic проверьте TCP/HTTPS; HYBRID/MIXED2 остаются более спокойным дефолтом |
 | **MIXED** | TCP TPROXY, UDP MARK → `clash-tun` | `tproxy-port: 7894` + `tun:` | На Keenetic: проблема TCP `:443` TPROXY; лучше HYBRID/MIXED2 |
 | **MIXED2** | TCP nat DNAT → `:7893`, UDP MARK → `clash-tun` | `redir-port: 7893` + `tun:` (без `tproxy-port`) | TCP как HYBRID + UDP как MIXED; все Options на Keenetic |
 
@@ -325,9 +331,9 @@ SSClash предлагает два режима:
 - **Firewall redirect** — Настройки → DNS. Дефолт на Keenetic и обычном Linux; опционально на OpenWrt. Перенаправляет LAN `:53` (TCP/UDP) на Mihomo `:7874`.
 - **Block DoT / Block DoH (dibdot) / Block DoH (custom)** — Настройки → DNS при активном перехвате DNS Mihomo; см. [Блокировка DoT / DoH](#блокировка-dot--doh).
 - **Блокировать QUIC-трафик** — блокирует UDP/443 для повышения эффективности прокси (YouTube и т.п.)
-- **Зарезервированные сети (firewall)** — destination IPv4 CIDR, которые не маркируются прозрачным прокси (Настройки → Options). По умолчанию RFC special-use и CGNAT `100.64.0.0/10` (Tailscale/Headscale); уберите этот префикс, если Tailnet должен идти через Mihomo. Правила Mihomo `private-ips` — отдельно. В UI скрыты на **Keenetic TUN**.
-- **Фильтр портов (firewall)** — destination TCP/UDP обрабатываются в netfilter *до* Mihomo (Настройки → Options). **Bypass** никогда не попадает в ядро (например, фиксированные порты BitTorrent). **Proxy-only** (если список не пуст) помечает только перечисленные порты — удобно на слабом роутере, чтобы случайные торрент-пиры не попадали в ядро. Пустые списки сохраняют прежнее поведение «все порты». Это не то же самое, что правила Mihomo `DST-PORT`. В UI скрыт на **Keenetic TUN** (Mihomo обходит port filter SSClash).
-- **Обход клиентов (firewall)** — source IPv4 CIDR без маркировки прозрачного прокси *и* без DNS redirect, поэтому эти LAN-хосты не попадают в Mihomo (Настройки → Options). Это не `SRC-IP-CIDR` в `config.yaml` (там пакет всё равно идёт в ядро). Пустой список = off. При fake-ip укажите устройству реальный DNS. На **OpenWrt dnsmasq upstream** (дефолт) список обхода не меняет DNS для клиентов с DNS роутера — они по-прежнему идут через dnsmasq → Mihomo; задайте публичный DNS на обходимом клиенте. На **OpenWrt firewall redirect** обход отключает DNS redirect (как на Keenetic/Linux) — нужен свой DNS на клиенте. На **Keenetic TUN** обход отключает только DNS redirect и QUIC block — Mihomo auto-route по-прежнему захватывает IP; для per-client control используйте `SRC-IP-CIDR` в `config.yaml` или HYBRID/MIXED2/TPROXY.
+- **Зарезервированные сети (firewall)** — destination IPv4 CIDR, которые не маркируются прозрачным прокси (Настройки → Options). По умолчанию RFC special-use и CGNAT `100.64.0.0/10` (Tailscale/Headscale); уберите этот префикс, если Tailnet должен идти через Mihomo. Правила Mihomo `private-ips` — отдельно.
+- **Фильтр портов (firewall)** — destination TCP/UDP обрабатываются в netfilter *до* Mihomo (Настройки → Options). **Bypass** никогда не попадает в ядро (например, фиксированные порты BitTorrent). **Proxy-only** (если список не пуст) помечает только перечисленные порты — удобно на слабом роутере, чтобы случайные торрент-пиры не попадали в ядро. Пустые списки сохраняют прежнее поведение «все порты». Это не то же самое, что правила Mihomo `DST-PORT`.
+- **Обход клиентов (firewall)** — source IPv4 CIDR без маркировки прозрачного прокси *и* без DNS redirect, поэтому эти LAN-хосты не попадают в Mihomo (Настройки → Options). Это не `SRC-IP-CIDR` в `config.yaml` (там пакет всё равно идёт в ядро). Пустой список = off. При fake-ip укажите устройству реальный DNS. На **OpenWrt dnsmasq upstream** (дефолт) список обхода не меняет DNS для клиентов с DNS роутера — они по-прежнему идут через dnsmasq → Mihomo; задайте публичный DNS на обходимом клиенте. На **OpenWrt firewall redirect** обход отключает DNS redirect (как на Keenetic/Linux) — нужен свой DNS на клиенте.
 - **Хранить правила и proxy-providers в RAM** — симлинки `rule-providers/` и `proxy-providers/` на tmpfs для снижения износа NAND
 - **Добавить HWID-заголовки к подпискам** — 16-символьный HWID для Remnawave на запросах proxy-provider (также при загрузке полного конфига по URL)
 - **Резервное копирование** — экспорт/импорт настроек и списков из `.ssclash/` (включая `doh-custom.txt`) на странице Настроек
