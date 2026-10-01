@@ -189,7 +189,7 @@ On the **iptables** backend, DoH blocking requires working **ipset** (installed 
 
 Optional **conntrack-tools** (the `conntrack` CLI on PATH): LAN flows to port `53` are cleared when **Firewall redirect** turns on or off, and on **Stop** if redirect was installed. Port `853` is cleared only when Block DoT turns on. A repeated Apply with the same flags does not touch conntrack. Keenetic repair clears a port only when repair actually restored redirect or DoT DROP rules, not when it only re-seated an existing jump. **nft** and **iptables** share kernel conntrack. Without the tool, new packets follow the new rules immediately but old sessions linger until timeout, with a one-time gateway log warning when redirect or Block DoT is on. Installers do not install it — use `opkg install conntrack-tools` on OpenWrt or Entware if you want immediate teardown.
 
-On **Keenetic TUN**, TCP and UDP are both marked into `clash-tun`. Prefer **HYBRID** or **MIXED2** if ordinary TCP/HTTPS through the tun device fails.
+On **Keenetic TUN** these drops apply: SSClash marks TCP and UDP into `clash-tun`.
 
 Toggle changes take effect on **Start**, **Restart**, or firewall **Apply**. **Refresh list** updates dibdot immediately.
 
@@ -239,7 +239,7 @@ are still required for kernel support (`xt_TPROXY`, …). In **TUN** mode Mihomo
 nat DNAT + TPROXY, all Options features, works with router HTTPS on 443), **MIXED2**
 (TCP like HYBRID, UDP via `clash-tun` — better QUIC/UDP, no TCP 443 TPROXY issue),
 **TPROXY** (if you move router management HTTPS off TCP 443, e.g. 8443), **TUN**
-(SSClash MARK of TCP and UDP into `clash-tun`, same as OpenWrt; verify TCP/HTTPS).
+(SSClash MARK of TCP and UDP into `clash-tun`, same as OpenWrt).
 **MIXED** (TCP TPROXY + UDP TUN) inherits the Keenetic TCP `:443` TPROXY limitation;
 rarely useful here — prefer **HYBRID** or **MIXED2**.
 
@@ -253,18 +253,7 @@ LAN TCP to `:443` often never reaches SSClash (TPROXY counters stay at zero). Us
 (default), move router management HTTPS off TCP 443 in the Keenetic web UI (any port
 except 443, e.g. 8443), or use **TUN**.
 
-**Keenetic TUN and OpenWrt/Linux TUN** use the same capture: SSClash marks traffic into `clash-tun`, and the synced `tun:` block has `auto-route: false` and `auto-redirect: false`. TCP and UDP both enter the tun device. That is not the same as HYBRID (TCP stays on nat DNAT and never enters the tun). After upgrading a Keenetic that previously ran Mihomo `auto-redirect`, **Stop then Start** so old redirect rules are removed.
-
-Check pure **TUN** on the router in this order:
-
-1. Ordinary **TCP/HTTPS** from a LAN client opens. This is the blocker. Then try `tun.stack` **system** and **gvisor** (or **mixed**).
-2. **Respect Keenetic access policy** — a device inside the selected policy is proxied; a device outside is not.
-3. **Bypass clients**, **port filter**, and **reserved networks** stay out of Mihomo.
-4. DNS redirect, and Block DoT / Block DoH when those switches are on.
-5. After an NDMS reload or a WAN change, the `CLASH` and `SSCLASH_LATE` chains are still in place.
-6. QUIC/`DIRECT` and IPsec are worth noting; they are not a reason to roll back this capture change by themselves.
-7. A WireGuard server on the router still works.
-8. If TCP/HTTPS fails, switch the mode to **HYBRID** or **MIXED2** without rolling back the binary.
+**Keenetic TUN** uses the same capture as OpenWrt and Linux: SSClash marks traffic into `clash-tun` (`auto-route: false`, `auto-redirect: false`). Access policy, bypass clients, port filter, and reserved networks apply. After upgrading from a build that used Mihomo `auto-redirect`, **Stop then Start**.
 
 ## Proxy modes (Settings)
 
@@ -272,7 +261,7 @@ Check pure **TUN** on the router in this order:
 |---|---|---|---|
 | **TPROXY** | SSClash mangle TPROXY `:7894` | `tproxy-port: 7894` | Default on OpenWrt/Linux |
 | **HYBRID** | TCP nat DNAT → `:7893`, UDP TPROXY `:7894` | `redir-port: 7893`, `tproxy-port: 7894` | Default on Keenetic; full Options |
-| **TUN** | MARK → `clash-tun` (OpenWrt, Linux, and Keenetic) | `tun:` block (`auto-route: false`) | TUN stack in Settings. On Keenetic, verify TCP/HTTPS; HYBRID/MIXED2 remain the safer default |
+| **TUN** | MARK → `clash-tun` (OpenWrt, Linux, and Keenetic) | `tun:` block (`auto-route: false`) | TUN stack in Settings |
 | **MIXED** | TCP TPROXY, UDP MARK → `clash-tun` | `tproxy-port: 7894` + `tun:` | On Keenetic: TCP `:443` TPROXY issue; prefer HYBRID/MIXED2 |
 | **MIXED2** | TCP nat DNAT → `:7893`, UDP MARK → `clash-tun` | `redir-port: 7893` + `tun:` (no `tproxy-port`) | HYBRID TCP path + MIXED UDP path; full Options on Keenetic |
 

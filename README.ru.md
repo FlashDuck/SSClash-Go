@@ -189,7 +189,7 @@ tar -xzf /tmp/ssclash-openwrt-service.tar.gz -C /
 
 Опционально **conntrack-tools** (утилита `conntrack` в PATH): сброс LAN-сессий на `:53` происходит, когда **Firewall redirect** включается или выключается, и при **Stop**, если redirect был установлен. `:853` сбрасывается только в момент включения Block DoT. Повторный Apply с теми же флагами conntrack не трогает. Repair на Keenetic сбрасывает порт только если repair реально восстановил redirect или DoT DROP, а не при одном лишь re-seat jump. **nft** и **iptables** делят один conntrack. Без пакета новые пакеты идут по новым правилам сразу, старые сессии — до таймаута; предупреждение в логе gateway — если redirect или Block DoT включены. Инсталлятор не ставит — при необходимости `opkg install conntrack-tools` (OpenWrt / Entware).
 
-На **Keenetic TUN** TCP и UDP маркируются в `clash-tun`. Если обычный TCP/HTTPS через устройство не идёт, предпочтительны **HYBRID** или **MIXED2**.
+На **Keenetic TUN** эти DROP тоже работают: SSClash маркирует TCP и UDP в `clash-tun`.
 
 Изменения переключателей применяются при **Start**, **Restart** или **Apply** файрвола. Кнопка **Refresh list** обновляет dibdot без ожидания планового refresh.
 
@@ -242,7 +242,7 @@ iptables, но принудительный nft отвергается при Ap
 на 443), **MIXED2** (TCP как HYBRID, UDP через `clash-tun` — лучше QUIC/UDP, без
 проблемы TCP 443 TPROXY), **TPROXY** (если перенести HTTPS **управления роутером**
 с TCP 443, напр. 8443, в веб-UI Keenetic), **TUN**
-(SSClash маркирует TCP и UDP в `clash-tun`, как на OpenWrt; проверьте TCP/HTTPS).
+(SSClash маркирует TCP и UDP в `clash-tun`, как на OpenWrt).
 **MIXED** (TCP TPROXY + UDP TUN) наследует ограничение Keenetic на TCP `:443` в TPROXY;
 на практике редко полезен — предпочитайте **HYBRID** или **MIXED2**.
 
@@ -256,18 +256,7 @@ LAN TCP на `:443` часто не доходит до SSClash (счётчик�
 Используйте **HYBRID** (дефолт), перенесите HTTPS управления роутером на другой порт
 (напр. 8443) в веб-UI Keenetic, или **TUN**.
 
-**Keenetic TUN и OpenWrt/Linux TUN** используют один захват: SSClash маркирует трафик в `clash-tun`, в блоке `tun:` стоят `auto-route: false` и `auto-redirect: false`. TCP и UDP оба входят в устройство. Это не HYBRID: там TCP остаётся на nat DNAT и в tun не попадает. После обновления Keenetic, где раньше работал Mihomo `auto-redirect`, сделайте **Stop, затем Start**, чтобы снять старые redirect.
-
-Проверьте чистый **TUN** на роутере в таком порядке:
-
-1. Обычный **TCP/HTTPS** с клиента в LAN открывается. Это блокер. Затем отдельно `tun.stack` **system** и **gvisor** (или **mixed**).
-2. **Respect Keenetic access policy** — устройство внутри выбранной политики идёт в прокси, устройство вне неё нет.
-3. **Обход клиентов**, **фильтр портов** и **зарезервированные сети** не попадают в Mihomo.
-4. DNS redirect и Block DoT / Block DoH, если эти переключатели включены.
-5. После пересборки NDMS или смены WAN цепочки `CLASH` и `SSCLASH_LATE` на месте.
-6. QUIC/`DIRECT` и IPsec стоит записать отдельно; сами по себе они не повод откатывать этот захват.
-7. WireGuard-сервер на роутере по-прежнему работает.
-8. Если TCP/HTTPS не открывается, переключите режим на **HYBRID** или **MIXED2**, бинарник откатывать не нужно.
+**Keenetic TUN** использует тот же захват, что OpenWrt и Linux: SSClash маркирует трафик в `clash-tun` (`auto-route: false`, `auto-redirect: false`). Политики доступа, обход клиентов, фильтр портов и зарезервированные сети работают. После обновления со сборки, где был Mihomo `auto-redirect`, сделайте **Stop, затем Start**.
 
 ## Режимы прокси (Настройки)
 
@@ -275,7 +264,7 @@ LAN TCP на `:443` часто не доходит до SSClash (счётчик�
 |---|---|---|---|
 | **TPROXY** | SSClash mangle TPROXY `:7894` | `tproxy-port: 7894` | Дефолт на OpenWrt/Linux |
 | **HYBRID** | TCP nat DNAT → `:7893`, UDP TPROXY `:7894` | `redir-port: 7893`, `tproxy-port: 7894` | Дефолт на Keenetic; все Options |
-| **TUN** | MARK → `clash-tun` (OpenWrt, Linux и Keenetic) | блок `tun:` (`auto-route: false`) | TUN stack в Настройках. На Keenetic проверьте TCP/HTTPS; HYBRID/MIXED2 остаются более спокойным дефолтом |
+| **TUN** | MARK → `clash-tun` (OpenWrt, Linux и Keenetic) | блок `tun:` (`auto-route: false`) | TUN stack в Настройках |
 | **MIXED** | TCP TPROXY, UDP MARK → `clash-tun` | `tproxy-port: 7894` + `tun:` | На Keenetic: проблема TCP `:443` TPROXY; лучше HYBRID/MIXED2 |
 | **MIXED2** | TCP nat DNAT → `:7893`, UDP MARK → `clash-tun` | `redir-port: 7893` + `tun:` (без `tproxy-port`) | TCP как HYBRID + UDP как MIXED; все Options на Keenetic |
 
