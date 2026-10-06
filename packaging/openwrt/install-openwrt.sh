@@ -29,7 +29,7 @@ SSCLASH_API="https://api.github.com/repos/${REPO}/releases/latest"
 
 # --- Mihomo version is pinned (no GitHub API call) ---------------------------
 # Change MIHOMO_VER_FIXED to any release tag you want, e.g. v1.19.24, v1.19.18.
-MIHOMO_VER_FIXED="v1.19.30"
+MIHOMO_VER_FIXED="v1.19.18"
 
 ROOT=/opt/clash
 SSCLASH_BIN="$ROOT/bin/ssclash"
