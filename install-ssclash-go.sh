@@ -12,7 +12,7 @@ set -e
 
 echo "[ssclash-go] bootstrap loaded" >&2
 
-REPO="zerolabnet/SSClash-Go"
+REPO="FlashDuck/SSClash-Go"
 BRANCH="${SSCLASH_INSTALL_BRANCH:-main}"
 GITHUB_RAW="https://github.com/${REPO}/raw/refs/heads/${BRANCH}"
 
