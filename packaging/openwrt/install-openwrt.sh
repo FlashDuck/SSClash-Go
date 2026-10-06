@@ -669,4 +669,239 @@ detect_arch() {
 
 # ---- 3. Package index -------------------------------------------------------
 pkg_update() {
-	if [ "$PKG
+	if [ "$PKG_UPDATED" = "1" ]; then
+		return 0
+	fi
+	say "updating package index..."
+	if [ "$PKG_MGR" = "apk" ]; then
+		apk update || die "apk update failed"
+	else
+		opkg update || die "opkg update failed"
+	fi
+	PKG_UPDATED=1
+}
+
+# ---- 4. Dependencies --------------------------------------------------------
+install_deps() {
+	# wget-ssl: stock OpenWrt wget is often uclient-fetch; GitHub HTTPS needs real SSL wget.
+	DEPS="$TPROXY_PKG kmod-tun ca-bundle wget-ssl"
+	say "installing dependencies: $DEPS"
+	if [ "$PKG_MGR" = "apk" ]; then
+		apk add $DEPS || die "dependency install failed"
+		apk add conntrack ipset || warn "conntrack/ipset install failed (DNS session flush and ipset rules may be skipped)"
+	else
+		opkg install $DEPS || die "dependency install failed"
+		opkg install conntrack ipset || warn "conntrack/ipset install failed (DNS session flush and ipset rules may be skipped)"
+	fi
+}
+
+# ---- 5. Latest ssclash-go release (GitHub API) ------------------------------
+fetch_ssclash_release() {
+	say "fetching latest ssclash-go release..."
+	RELEASE_JSON=$(github_get "$SSCLASH_API") || die "GitHub API request failed"
+	[ -n "$RELEASE_JSON" ] || die "empty GitHub API response"
+
+	SSCLASH_TAG=$(printf '%s' "$RELEASE_JSON" \
+		| grep '"tag_name"' | head -1 \
+		| sed 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
+	[ -n "$SSCLASH_TAG" ] || die "could not parse release tag"
+	info "release: ${SSCLASH_TAG}"
+
+	SSCLASH_BIN_URL=$(printf '%s' "$RELEASE_JSON" \
+		| grep '"browser_download_url"' \
+		| grep "ssclash-linux-${SSCLASH_ASSET}\"" | head -1 \
+		| sed 's/.*"browser_download_url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
+	[ -n "$SSCLASH_BIN_URL" ] || die "asset ssclash-linux-${SSCLASH_ASSET} not found in release"
+	info "binary: ${SSCLASH_BIN_URL##*/}"
+
+	SSCLASH_SVC_URL=$(printf '%s' "$RELEASE_JSON" \
+		| grep '"browser_download_url"' \
+		| grep 'ssclash-openwrt-service.tar.gz"' | head -1 \
+		| sed 's/.*"browser_download_url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
+}
+
+# ---- 6. ssclash binary ------------------------------------------------------
+install_ssclash() {
+	say "downloading ssclash..."
+	TMP="$(mktemp)"
+	if ! GITHUB_GET_MAX_TIME=300 github_get "$SSCLASH_BIN_URL" "$TMP"; then
+		rm -f "$TMP"
+		die "ssclash download failed"
+	fi
+	if ! install_bin "$TMP" "$SSCLASH_BIN" 755 "ssclash"; then
+		rm -f "$TMP"
+		die "ssclash install failed (bad download?)"
+	fi
+	rm -f "$TMP"
+	if ! "$SSCLASH_BIN" version >/dev/null 2>&1 && ! "$SSCLASH_BIN" -h >/dev/null 2>&1; then
+		warn "ssclash installed but did not respond to version/-h (check arch)"
+	fi
+	say "installed ${SSCLASH_BIN}"
+}
+
+# ---- 7. procd service -------------------------------------------------------
+install_init_from_raw() {
+	_url="${GITHUB_RAW}/packaging/openwrt/etc/init.d/ssclash"
+	_tmp="/tmp/ssclash-init.$$"
+	say "fetching init.d/ssclash from repository..."
+	if github_get "$_url" "$_tmp" && [ -s "$_tmp" ]; then
+		install_file "$_tmp" /etc/init.d/ssclash 755
+		rm -f "$_tmp"
+		return 0
+	fi
+	rm -f "$_tmp"
+	return 1
+}
+
+install_service() {
+	mkdir -p "$ROOT/.ssclash" "$ROOT/local-rules" "$ROOT/rule-providers" "$ROOT/proxy-providers" "$ROOT/subscriptions" "$ROOT/ui"
+
+	SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+	if [ -f "$SCRIPT_DIR/etc/init.d/ssclash" ]; then
+		install_file "$SCRIPT_DIR/etc/init.d/ssclash" /etc/init.d/ssclash 755
+		configure_openwrt_init
+		return 0
+	fi
+
+	_svc_ok=0
+	if [ -n "$SSCLASH_SVC_URL" ]; then
+		say "installing init.d service from release..."
+		info "downloading ssclash-openwrt-service.tar.gz (${SSCLASH_TAG:-release})..."
+		if GITHUB_GET_MAX_TIME=120 github_get "$SSCLASH_SVC_URL" /tmp/ssclash-svc.tgz; then
+			info "extracting service files..."
+			if tar -xzf /tmp/ssclash-svc.tgz -C /; then
+				_svc_ok=1
+			else
+				warn "could not extract service bundle"
+			fi
+			rm -f /tmp/ssclash-svc.tgz
+		else
+			warn "could not download service bundle from release"
+		fi
+	fi
+
+	if [ "$_svc_ok" = "0" ]; then
+		install_init_from_raw || warn "init.d/ssclash not installed — copy from release or re-run installer"
+	fi
+	configure_openwrt_init
+}
+
+# ---- 8. mihomo kernel (pinned version, direct URL) --------------------------
+# Extract to a temp file, verify, then atomically replace. Never truncate or
+# delete an existing working kernel on failure.
+install_mihomo() {
+	if [ "$SKIP_MIHOMO" = "1" ]; then
+		warn "skipping Mihomo download (--no-mihomo)"
+		MIHOMO_STATUS="skipped (--no-mihomo)"
+		return 0
+	fi
+	if [ -z "$MIHOMO_ARCH" ]; then
+		warn "Mihomo architecture not determined — install manually from Settings"
+		MIHOMO_STATUS="missing (unknown arch)"
+		return 0
+	fi
+
+	MIHOMO_VER="$MIHOMO_VER_FIXED"
+	info "Mihomo: ${MIHOMO_VER} (pinned)"
+
+	case "$MIHOMO_ARCH" in
+		loong64)
+			MIHOMO_URL="https://github.com/MetaCubeX/mihomo/releases/download/${MIHOMO_VER}/mihomo-linux-loong64-abi2-${MIHOMO_VER}.gz"
+			;;
+		*)
+			MIHOMO_URL="https://github.com/MetaCubeX/mihomo/releases/download/${MIHOMO_VER}/mihomo-linux-${MIHOMO_ARCH}-${MIHOMO_VER}.gz"
+			;;
+	esac
+	info "url: ${MIHOMO_URL}"
+
+	_tmp_gz="$(mktemp)"
+	_tmp_bin="$(mktemp)"
+	say "downloading Mihomo kernel..."
+	if ! GITHUB_GET_MAX_TIME=300 github_get "$MIHOMO_URL" "$_tmp_gz"; then
+		warn "Mihomo download failed — install from Settings later"
+		rm -f "$_tmp_gz" "$_tmp_bin"
+		MIHOMO_STATUS="missing (download failed)"
+		return 0
+	fi
+
+	if ! gunzip -c "$_tmp_gz" > "$_tmp_bin"; then
+		warn "Mihomo extraction failed — keeping existing kernel; install from Settings later"
+		rm -f "$_tmp_gz" "$_tmp_bin"
+		MIHOMO_STATUS="missing (extract failed)"
+		return 0
+	fi
+	rm -f "$_tmp_gz"
+	if ! verify_downloaded_bin "$_tmp_bin" "Mihomo"; then
+		rm -f "$_tmp_bin"
+		MIHOMO_STATUS="missing (bad/wrong-arch binary)"
+		return 0
+	fi
+	# -v runs from /tmp when that mount is executable. A second copy is written
+	# beside the old kernel only when the flash filesystem has room for it.
+	if ! install_checked_bin "$_tmp_bin" "$CLASH_BIN" 755 "Mihomo" 1; then
+		rm -f "$_tmp_bin"
+		MIHOMO_STATUS="missing (install failed)"
+		return 0
+	fi
+	rm -f "$_tmp_bin"
+	rm -f "$ROOT/bin/meta-backup" 2>/dev/null || true
+
+	MIHOMO_V=$("$CLASH_BIN" -v 2>/dev/null || true)
+	say "Mihomo installed: ${MIHOMO_V:-ok}"
+	MIHOMO_STATUS="installed (${MIHOMO_V:-$MIHOMO_VER})"
+}
+
+# ---- MAIN -------------------------------------------------------------------
+parse_install_options "$@"
+apply_install_paths
+validate_ui_port
+finalize_ui_addr
+prepare_tls_certs
+
+[ "$(id -u)" = "0" ] || die "run as root"
+
+say "SSClash-Go installer"
+detect_openwrt
+ensure_fetcher
+detect_arch
+
+SSCLASH_WAS_ENABLED=0
+if [ -x /etc/init.d/ssclash ] && /etc/init.d/ssclash enabled 2>/dev/null; then
+	SSCLASH_WAS_ENABLED=1
+	info "service was enabled — will restore after upgrade"
+fi
+
+# Download release metadata and binaries while SSClash may still provide DNS/proxy.
+# stop_ssclash_for_upgrade runs only inside install_bin / before kernel replace.
+fetch_ssclash_release
+pkg_update
+install_deps
+
+install_ssclash
+install_service
+
+if [ "$SSCLASH_WAS_ENABLED" = "1" ]; then
+	/etc/init.d/ssclash enable
+fi
+
+install_mihomo
+assert_mihomo_ready
+
+/etc/init.d/ssclash enable
+/etc/init.d/ssclash start >/dev/null 2>&1 \
+	|| warn "service start skipped — open the web UI and press Start"
+
+IP=$(openwrt_lan_ip)
+UI_HOST=$(ui_effective_host "$IP")
+UI_P=$(ui_effective_port)
+SCHEME=$(ui_scheme)
+cat <<EOF
+
+ HTTPS (optional): use --tls-self-signed or --tls-cert/--tls-key on install.
+   Change port/bind later: uncomment SSCLASH_ADDR in /etc/init.d/ssclash.
+
+ Summary:
+   ssclash:  ${SSCLASH_BIN} (${SSCLASH_TAG:-installed})
+   Mihomo:   ${MIHOMO_STATUS}
+EOF
+say "done. Open ${SCHEME}://${UI_HOST}:${UI_P}, set the admin password, then Start."
