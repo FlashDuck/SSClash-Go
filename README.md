@@ -65,7 +65,7 @@ Each installer fetches the matching release binary, sets up `/opt/clash`, downlo
 **OpenWrt** (run on the router):
 
 ```bash
-wget -T 30 -qO- https://github.com/zerolabnet/SSClash-Go/raw/refs/heads/main/install-ssclash-go.sh | ash
+wget -T 30 -qO- https://github.com/FlashDuck/SSClash-Go/raw/refs/heads/main/install-ssclash-go.sh | ash
 ```
 
 SSClash **stops itself** before upgrade when the service is already running (so GitHub downloads work through transparent proxy and binaries can be replaced safely).
