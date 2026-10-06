@@ -95,7 +95,7 @@ wget -T 30 -qO- https://github.com/zerolabnet/SSClash-Go/raw/refs/heads/main/ins
 | `--tls-cert <path>` | TLS-сертификат (PEM); требует `--tls-key` |
 | `--tls-key <path>` | TLS-ключ (PEM); требует `--tls-cert` |
 | `--tls-self-signed` | Сгенерировать `$ROOT/.ssclash/tls.{crt,key}` (нужен `openssl`) |
-| `--mode gateway\|server` | Только Linux — шлюз (прозрачный прокси) или сервер (`listeners:`) |
+| `--mode gateway\|server` | Только Linux — шлюз (прозрачный прокси) или сервер. В режиме server при отсутствии `config.yaml` записывается пример входящего `listeners:` |
 | `--version <tag>` | Скачать конкретный релиз (по умолчанию: latest) |
 | `--from <path>` | Установить локальный бинарник вместо загрузки |
 | `--no-mihomo` | Пропустить загрузку ядра Mihomo (все установщики) |
@@ -201,7 +201,7 @@ tar -xzf /tmp/ssclash-openwrt-service.tar.gz -C /
 curl -fsSL https://github.com/zerolabnet/SSClash-Go/raw/refs/heads/main/install-ssclash-go.sh | sudo sh -s -- --from ./ssclash-linux-amd64 --mode gateway
 ```
 
-Режим gateway применяет файрвол, policy routing и перехват DNS (зависит от платформы) при **Start** (OpenWrt: dnsmasq upstream по умолчанию; Keenetic/Linux: firewall redirect). Режим server запускает только Mihomo (`listeners:` в конфигурации).
+Режим gateway применяет файрвол, policy routing и перехват DNS (зависит от платформы) при **Start** (OpenWrt: dnsmasq upstream по умолчанию; Keenetic/Linux: firewall redirect). Режим server запускает только Mihomo. Свежая установка `--mode server` записывает в `config.yaml` пример входящего `listeners:`; уже существующий файл не трогает.
 
 ## Ручная установка — Keenetic
 

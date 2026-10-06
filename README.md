@@ -95,7 +95,7 @@ wget -T 30 -qO- https://github.com/zerolabnet/SSClash-Go/raw/refs/heads/main/ins
 | `--tls-cert <path>` | TLS certificate (PEM); requires `--tls-key` |
 | `--tls-key <path>` | TLS private key (PEM); requires `--tls-cert` |
 | `--tls-self-signed` | Generate `$ROOT/.ssclash/tls.{crt,key}` (needs `openssl`) |
-| `--mode gateway\|server` | Linux only — gateway (transparent proxy) or server (`listeners:`) |
+| `--mode gateway\|server` | Linux only — gateway (transparent proxy) or server. Server seeds `config.yaml` with an inbound `listeners:` example when that file is still missing |
 | `--version <tag>` | Download a specific release tag (default: latest) |
 | `--from <path>` | Install a local binary instead of downloading |
 | `--no-mihomo` | Skip Mihomo kernel download (all installers) |
@@ -201,7 +201,7 @@ Prerequisites: systemd, `nft` or `iptables`, `ip`.
 curl -fsSL https://github.com/zerolabnet/SSClash-Go/raw/refs/heads/main/install-ssclash-go.sh | sudo sh -s -- --from ./ssclash-linux-amd64 --mode gateway
 ```
 
-Gateway mode applies firewall, policy routing and platform DNS interception when you press **Start** (OpenWrt: dnsmasq upstream by default; Keenetic/Linux: firewall redirect). Server mode runs Mihomo only (`listeners:` in Configuration).
+Gateway mode applies firewall, policy routing and platform DNS interception when you press **Start** (OpenWrt: dnsmasq upstream by default; Keenetic/Linux: firewall redirect). Server mode runs Mihomo only. A fresh `--mode server` install seeds `config.yaml` with an inbound `listeners:` example; an existing file is kept.
 
 ## Manual install — Keenetic
 

@@ -17,7 +17,9 @@
 # Options:
 #   --mode gateway|server  Install mode (prompted when omitted).
 #                          gateway = transparent proxy (firewall/routing/DNS).
-#                          server  = Mihomo only (inbound listeners:).
+#                          server  = Mihomo only. First start seeds config.yaml
+#                                    with an inbound listeners: example when
+#                                    that file is still missing.
 #   --from <path>   Install this local binary instead of downloading.
 #   --no-mihomo     Skip Mihomo kernel download (install later from Settings).
 #   --version <tag> Download a specific release tag (default: latest).
@@ -778,8 +780,9 @@ else
 	cat <<EOF
 
  Server: Mihomo runs as a proxy server (no firewall/routing/DNS from SSClash).
- Define inbound listeners: in Configuration and open those ports in your host
- firewall.
+ A fresh install seeds config.yaml with an inbound listeners: example; an
+ existing file is kept. Replace the marked placeholders and open those ports
+ in the host firewall.
 EOF
 fi
 cat <<EOF
